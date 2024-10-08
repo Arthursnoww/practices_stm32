@@ -1,0 +1,184 @@
+#include <stdint.h>
+#include <stdbool.h>
+
+#if !defined(__SOFT_FP__) && defined(__ARM_FP)
+  #warning "FPU is not initialized, but the project is compiling for an FPU. Please initialize the FPU before use."
+#endif
+
+#include "stm32f1xx.h"
+
+/* Function Prototypes */
+void USART2_IRQHandler(void);
+void init_USART2(void);
+void init_GPIO(void);
+void init_TIM2(void);
+void set_PWM(uint8_t channel, uint8_t value);
+void toggle_demo_mode(void);
+
+/* Global variables */
+volatile bool demo_mode = false;
+volatile uint8_t pwm_r = 0, pwm_g = 0, pwm_b = 0;
+
+int main(void){
+    /*init_GPIO();
+    init_USART2();
+    init_TIM2();
+
+    while (1)
+    {
+        if (demo_mode)
+        {
+            // Demo mode logic: Fade LEDs automatically
+            for (int i = 0; i < 100; i++)
+            {
+                set_PWM(0, i); // Red
+                set_PWM(1, i); // Green
+                set_PWM(2, i); // Blue
+                for (volatile int j = 0; j < 10000; j++); // Delay
+            }
+            for (int i = 100; i > 0; i--)
+            {
+                set_PWM(0, i); // Red
+                set_PWM(1, i); // Green
+                set_PWM(2, i); // Blue
+                for (volatile int j = 0; j < 10000; j++); // Delay
+            }
+        }
+    }
+}*/
+
+	    init_GPIO();
+	    init_TIM2();
+
+	    // Teste simples para verificar os LEDs
+	    while (1)
+	    {
+	        for (int i = 0; i < 100; i++) {
+	            TIM2->CCR4 = i; // PWM Red (PB11)
+	            TIM2->CCR3 = i; // PWM Green (PB10)
+	            TIM2->CCR2 = i; // PWM Blue (PB9)
+	            for (volatile int j = 0; j < 10000; j++); // Delay
+	        }
+
+	        for (int i = 100; i > 0; i--) {
+	            TIM2->CCR4 = i; // PWM Red (PB11)
+	            TIM2->CCR3 = i; // PWM Green (PB10)
+	            TIM2->CCR2 = i; // PWM Blue (PB9)
+	            for (volatile int j = 0; j < 10000; j++); // Delay
+	        }
+	    }
+}
+
+
+/* USART2 Interrupt Handler */
+void USART2_IRQHandler(void)
+{
+    if (USART2->SR & USART_SR_RXNE)
+    {
+        static char buffer[4];
+        static int index = 0;
+        char received = USART2->DR;
+
+        // Handle buffer
+        buffer[index++] = received;
+        if (received == '\n' || (received == '\r' && buffer[index-2] == '\n'))
+        {
+            if (demo_mode && (buffer[0] != 'd' && buffer[0] != 'D'))
+            {
+                // Ignore commands in demo mode except for 'd' or 'D'
+                index = 0;
+                return;
+            }
+
+            // Handle received commands
+            switch (buffer[0])
+            {
+                case 'r': case 'R':
+                    pwm_r = (buffer[1] - '0') * 10 + (buffer[2] - '0');
+                    set_PWM(0, pwm_r);
+                    break;
+                case 'g': case 'G':
+                    pwm_g = (buffer[1] - '0') * 10 + (buffer[2] - '0');
+                    set_PWM(1, pwm_g);
+                    break;
+                case 'b': case 'B':
+                    pwm_b = (buffer[1] - '0') * 10 + (buffer[2] - '0');
+                    set_PWM(2, pwm_b);
+                    break;
+                case 'd': case 'D':
+                    toggle_demo_mode();
+                    break;
+                default:
+                    break;
+            }
+            index = 0;
+        }
+    }
+}
+
+/* Initialize USART2 for communication */
+void init_USART2(void)
+{
+    RCC->APB2ENR |= RCC_APB2ENR_IOPAEN;   // Enable GPIOA clock
+    RCC->APB1ENR |= RCC_APB1ENR_USART2EN; // Enable USART2 clock
+
+    GPIOA->CRL &= ~(GPIO_CRL_CNF2 | GPIO_CRL_MODE2); // Clear PA2 config
+    GPIOA->CRL |= GPIO_CRL_MODE2_0 | GPIO_CRL_CNF2_1; // PA2 as AF push-pull (TX)
+
+    USART2->BRR = 0x1D4C;  // 9600 baud rate @ 72MHz
+    USART2->CR1 |= USART_CR1_RE | USART_CR1_TE;  // Enable RX, TX
+    USART2->CR1 |= USART_CR1_RXNEIE;  // Enable RX interrupt
+    USART2->CR1 |= USART_CR1_UE;  // Enable USART
+
+    NVIC_EnableIRQ(USART2_IRQn);  // Enable USART interrupt in NVIC
+}
+
+/* Initialize GPIO for PWM output */
+void init_GPIO(void)
+{
+    RCC->APB2ENR |= RCC_APB2ENR_IOPBEN; // Enable GPIOB clock
+
+    // Configure PB11, PB10, PB9 as outputs for PWM
+    GPIOB->CRH &= 0xFFF00FFF;
+    GPIOB->CRH |= 0x000BB000;
+}
+
+/* Initialize Timer2 for PWM */
+void init_TIM2(void)
+{
+    RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;  // Enable TIM2 clock
+
+    TIM2->PSC = 72 - 1;  // Set prescaler for 1 MHz
+    TIM2->ARR = 100;     // Set auto-reload for 100 (PWM range 0-100)
+
+    // Configure PWM mode for channel 4 (Red)
+    TIM2->CCMR2 |= TIM_CCMR2_OC4M_2 | TIM_CCMR2_OC4M_1;
+    TIM2->CCER |= TIM_CCER_CC4E;
+
+    // Configure PWM mode for channel 3 (Green)
+    TIM2->CCMR2 |= TIM_CCMR2_OC3M_2 | TIM_CCMR2_OC3M_1;
+    TIM2->CCER |= TIM_CCER_CC3E;
+
+    // Configure PWM mode for channel 2 (Blue)
+    TIM2->CCMR1 |= TIM_CCMR1_OC2M_2 | TIM_CCMR1_OC2M_1;
+    TIM2->CCER |= TIM_CCER_CC2E;
+
+    TIM2->CR1 |= TIM_CR1_CEN;  // Enable the counter
+}
+
+/* Set PWM value for a specific channel (0: Red, 1: Green, 2: Blue) */
+void set_PWM(uint8_t channel, uint8_t value)
+{
+    switch (channel)
+    {
+        case 0: TIM2->CCR4 = value; break; // Red
+        case 1: TIM2->CCR3 = value; break; // Green
+        case 2: TIM2->CCR2 = value; break; // Blue
+    }
+}
+
+/* Toggle the demo mode */
+void toggle_demo_mode(void)
+{
+    demo_mode = !demo_mode;
+}

@@ -1,0 +1,292 @@
+#include <stdint.h>
+#include "stm32f1xx.h"
+
+#define CPU_CLK 8000000
+#define BaudRate 115200
+
+char ch = '\0';
+char command[6];
+
+uint8_t MAIN_SM = 0;
+uint8_t duty_cycle;
+uint8_t demoMode = 0;
+
+volatile uint16_t red = 0, green = 0, blue = 0;
+volatile uint8_t colorIndex = 0;
+volatile uint8_t increasing = 1;
+static uint16_t brightness = 0;
+
+uint8_t *ptr;
+
+void RCCEnable();
+void GPIOConfig();
+void USART1Config();
+void Timer3Config();
+void timer2Config();
+void resetDemoMode();
+void updateColorSequence();
+void uart_write(char ch);
+
+int main(void)
+{
+    RCCEnable();
+    GPIOConfig();
+    USART1Config();
+    Timer3Config();
+    timer2Config();
+
+    while (1)
+    {
+        if (MAIN_SM)
+        {
+            MAIN_SM = 0;
+            if (demoMode)
+            {
+                if (command[0] == 'd' || command[0] == 'D')
+                {
+                    resetDemoMode();
+                    TIM2->CR1 &= ~TIM_CR1_CEN;
+                    demoMode = !demoMode;
+                }
+            }
+            else
+            {
+                switch (command[0])
+                {
+                case 'R':
+                case 'r':
+                    duty_cycle = (command[1] - '0') * 10 + (command[2] - '0');
+                    TIM3->CCR1 = duty_cycle;
+                    break;
+
+                case 'G':
+                case 'g':
+                    duty_cycle = (command[1] - '0') * 10 + (command[2] - '0');
+                    TIM3->CCR2 = duty_cycle;
+                    break;
+
+                case 'B':
+                case 'b':
+                    duty_cycle = (command[1] - '0') * 10 + (command[2] - '0');
+                    TIM3->CCR3 = duty_cycle;
+                    break;
+                case 'd':
+                case 'D':
+                    demoMode = !demoMode;
+                    TIM2->CR1 |= TIM_CR1_CEN;
+                    break;
+                }
+            }
+        }
+    }
+}
+void resetDemoMode()
+{
+    red = 0;
+    blue = 0;
+    green = 0;
+    colorIndex = 0;
+    increasing = 1;
+    brightness = 0;
+    TIM3->CCR1 = 0;
+    TIM3->CCR2 = 0;
+    TIM3->CCR3 = 0;
+}
+void updateColorSequence()
+{
+    // Controla o ciclo de aumento e diminuição de PWM
+    static uint8_t step = 1;
+
+    if (increasing)
+    {
+        brightness += step;
+        if (brightness >= 100)
+            increasing = 0;
+    }
+    else
+    {
+        brightness -= step;
+        if (brightness == 0)
+        {
+            increasing = 1;
+            colorIndex = (colorIndex + 1) % 7; // Avança para a próxima cor
+        }
+    }
+
+    // Define a cor com base no colorIndex
+    switch (colorIndex)
+    {
+    case 0: // Vermelho
+        red = brightness;
+        green = 0;
+        blue = 0;
+        break;
+    case 1: // Verde
+        red = 0;
+        green = brightness;
+        blue = 0;
+        break;
+    case 2: // Azul
+        red = 0;
+        green = 0;
+        blue = brightness;
+        break;
+    case 3: // Amarelo
+        red = brightness;
+        green = brightness;
+        blue = 0;
+        break;
+    case 4: // Ciano
+        red = 0;
+        green = brightness;
+        blue = brightness;
+        break;
+    case 5: // Roxo
+        red = brightness;
+        green = 0;
+        blue = brightness;
+        break;
+    case 6: // Branco
+        red = brightness;
+        green = brightness;
+        blue = brightness;
+        break;
+    }
+
+    // Atualiza os valores de PWM
+    TIM3->CCR1 = red;   // Canal 1 - Vermelho
+    TIM3->CCR2 = green; // Canal 2 - Verde
+    TIM3->CCR3 = blue;  // Canal 3 - Azul
+}
+
+void uart_write(char ch)
+{
+    {
+        // Make sure the transmit data register is empty
+        while (!(USART1->SR & USART_SR_TXE))
+        {
+        }
+        // Write to transmit data register
+        USART1->DR = (ch & 0xFF);
+    }
+}
+
+void USART1Config()
+{
+    // enable clock access to USART1
+    RCC->APB2ENR |= RCC_APB2ENR_USART1EN;
+    // Enable receiver
+    USART1->CR1 |= USART_CR1_RE;
+    // Transmit Enable
+    USART1->CR1 |= USART_CR1_TE;
+    // Set Baud Rate
+    USART1->BRR = ((CPU_CLK + (BaudRate / 2U)) / BaudRate);
+    // Enable RXNIE interrupt
+    USART1->CR1 |= USART_CR1_RXNEIE;
+    // Enable USART1 interrupt in NVIC
+    NVIC_EnableIRQ(USART1_IRQn);
+    // Enable UART
+    USART1->CR1 |= USART_CR1_UE;
+}
+
+void RCCEnable()
+{
+    // enable clock GPIOA, GPIOB
+    RCC->APB2ENR |= RCC_APB2ENR_IOPAEN;
+    RCC->APB2ENR |= RCC_APB2ENR_IOPBEN;
+
+    // enable clock USART1
+    RCC->APB2ENR |= RCC_APB2ENR_USART1EN;
+}
+void GPIOConfig()
+{
+    // Configure PA9(TX)
+    GPIOA->CRH &= 0xFFFFFF0F;
+    GPIOA->CRH |= 0x000000B0;
+    // Configure PA10(RX)
+    GPIOA->CRH &= 0xFFFFF0FF;
+    GPIOA->CRH |= 0x00000400;
+
+    // PA6, PA7, PB0 - PWM
+    GPIOA->CRL &= 0x00FFFFFF;
+    GPIOA->CRL |= 0xBB000000;
+    GPIOB->CRL &= 0xFFFFFFF0;
+    GPIOB->CRL |= 0x0000000B;
+}
+
+void timer2Config()
+{
+    // Habilita o clock para o TIM3
+    RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
+
+    // Configura o prescaler e o valor de auto-reload
+    TIM2->PSC = 8000 - 1;
+    TIM2->ARR = 20 - 1; // 20ms
+
+    // Habilita a interrupção de atualização do TIM3
+    TIM2->DIER |= TIM_DIER_UIE;
+    NVIC_EnableIRQ(TIM2_IRQn);
+
+    // Ativa o timer
+    // TIM2->CR1 |= TIM_CR1_CEN;
+}
+
+void TIM2_IRQHandler(void)
+{
+    if (TIM2->SR & TIM_SR_UIF)
+    {
+        TIM2->SR &= ~TIM_SR_UIF; // Limpa a flag de interrupção
+        updateColorSequence();
+    }
+}
+
+
+int i = 0;
+void USART1_IRQHandler(void)
+{
+    /*Check the interrupt source*/
+    if ((USART1->SR & USART_SR_RXNE)) /*Received a character*/
+    {
+        /*Read data*/
+        ch = USART1->DR;
+        uart_write(ch);
+        if (ch != '\r')
+        {
+            command[i++] = ch;
+        }
+        else
+        {
+            command[i] = '\0';
+            MAIN_SM = 1;
+            i = 0;
+        }
+    }
+    if ((USART1->SR & USART_SR_TXE))
+    {
+        if (*ptr)
+        {
+            USART1->DR = (*ptr & 0xFF);
+            ptr++;
+        }
+        else
+            USART1->CR1 &= ~USART_CR1_TXEIE; // At end of MSG, disable interrupt
+    }
+}
+void Timer3Config()
+{
+    // Clock AFIO
+    RCC->APB2ENR |= (1 << 0);
+    // CH1 - A6, CH2 - A7, CH3 - B0
+    AFIO->MAPR &= (0x00 << 10);
+
+    // clock TIMER3
+    RCC->APB1ENR |= RCC_APB1ENR_TIM3EN;
+
+    TIM3->PSC = 0;
+    TIM3->ARR = 100;
+
+    TIM3->CCMR1 = 0x6060;
+    TIM3->CCMR2 = 0x0060;
+    TIM3->CCER = 0x0111;
+    TIM3->CR1 |= (1 << 0);
+}

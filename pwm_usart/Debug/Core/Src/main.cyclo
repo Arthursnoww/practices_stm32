@@ -1,0 +1,12 @@
+../Drivers/CMSIS/Include/core_cm3.h:1511:22:__NVIC_EnableIRQ	2
+../Core/Src/main.c:35:5:main	9
+../Core/Src/main.c:87:6:resetDemoMode	1
+../Core/Src/main.c:100:6:updateColorSequence	11
+../Core/Src/main.c:163:6:uart_write	2
+../Core/Src/main.c:173:6:USART1Config	1
+../Core/Src/main.c:189:6:RCCEnable	1
+../Core/Src/main.c:194:6:GPIOConfig	1
+../Core/Src/main.c:210:6:timer2Config	1
+../Core/Src/main.c:221:6:TIM2_IRQHandler	2
+../Core/Src/main.c:230:6:USART1_IRQHandler	5
+../Core/Src/main.c:253:6:Timer3Config	1

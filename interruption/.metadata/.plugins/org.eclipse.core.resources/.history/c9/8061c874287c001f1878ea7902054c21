@@ -1,0 +1,291 @@
+#include <stdint.h>
+#include "stm32f1xx.h"
+
+// Definição da frequência do clock do CPU e taxa de Baud Rate
+#define CPU_CLK 8000000
+#define BaudRate 115200
+
+// Variáveis globais
+char ch = '\0'; // Variável para armazenar o caractere recebido via UART
+char command[6]; // Buffer para armazenar o comando recebido via UART
+
+// Variáveis de estado
+uint8_t MAIN_SM = 0; // Máquina de estados principal
+uint8_t duty_cycle; // Ciclo de trabalho do PWM
+uint8_t demoMode = 0; // Modo demo (liga/desliga)
+
+volatile uint16_t red = 0, green = 0, blue = 0; // Valores de PWM para cada cor
+volatile uint8_t colorIndex = 0; // Índice da cor atual
+volatile uint8_t increasing = 1; // Flag para controle de aumento/diminuição de brilho
+static uint16_t brightness = 0; // Brilho atual
+
+uint8_t *ptr; // Ponteiro para envio de dados via UART
+
+// Declaração de funções
+void RCCEnable();
+void GPIOConfig();
+void USART1Config();
+void Timer3Config();
+void timer2Config();
+void resetDemoMode();
+void updateColorSequence();
+void uart_write(char ch);
+
+int main(void)
+{
+    // Habilitação de clocks e configuração de periféricos
+    RCCEnable();
+    GPIOConfig();
+    USART1Config();
+    Timer3Config();
+    timer2Config();
+
+    // Loop principal
+    while (1)
+    {
+        if (MAIN_SM) // Verifica se um comando foi recebido
+        {
+            MAIN_SM = 0; // Reseta o estado principal
+            if (demoMode) // Se estiver no modo demo
+            {
+                if (command[0] == 'd' || command[0] == 'D')
+                {
+                    resetDemoMode(); // Reseta as configurações do modo demo
+                    TIM2->CR1 &= ~TIM_CR1_CEN; // Desativa o Timer 2
+                    demoMode = !demoMode; // Alterna o modo demo
+                }
+            }
+            else // Se não estiver no modo demo
+            {
+                // Verifica qual comando foi recebido para alterar o PWM
+                switch (command[0])
+                {
+                case 'R': // Vermelho
+                case 'r':
+                    duty_cycle = (command[1] - '0') * 10 + (command[2] - '0');
+                    TIM3->CCR3 = duty_cycle; // A3 - Canal 3 (Vermelho)
+                    break;
+
+                case 'G': // Verde
+                case 'g':
+                    duty_cycle = (command[1] - '0') * 10 + (command[2] - '0');
+                    TIM3->CCR1 = duty_cycle; // A5 - Canal 1 (Verde)
+                    break;
+
+                case 'B': // Azul
+                case 'b':
+                    duty_cycle = (command[1] - '0') * 10 + (command[2] - '0');
+                    TIM3->CCR2 = duty_cycle; // A4 - Canal 2 (Azul)
+                    break;
+
+                case 'd': // Modo Demo
+                case 'D':
+                    demoMode = !demoMode;
+                    TIM2->CR1 |= TIM_CR1_CEN; // Ativa o Timer 2
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// Função para resetar o modo demo e as cores
+void resetDemoMode()
+{
+    red = 0;
+    blue = 0;
+    green = 0;
+    colorIndex = 0;
+    increasing = 1;
+    brightness = 0;
+    TIM3->CCR1 = 0;
+    TIM3->CCR2 = 0;
+    TIM3->CCR3 = 0;
+}
+
+// Função para atualizar a sequência de cores no modo demo
+void updateColorSequence()
+{
+    // Controla o ciclo de aumento e diminuição de PWM
+    static uint8_t step = 1;
+
+    if (increasing)
+    {
+        brightness += step;
+        if (brightness >= 100)
+            increasing = 0;
+    }
+    else
+    {
+        brightness -= step;
+        if (brightness == 0)
+        {
+            increasing = 1;
+            colorIndex = (colorIndex + 1) % 7; // Avança para a próxima cor
+        }
+    }
+
+    // Define a cor com base no colorIndex
+    switch (colorIndex)
+    {
+    case 0: // Vermelho
+        red = brightness;
+        green = 0;
+        blue = 0;
+        break;
+    case 1: // Verde
+        red = 0;
+        green = brightness;
+        blue = 0;
+        break;
+    case 2: // Azul
+        red = 0;
+        green = 0;
+        blue = brightness;
+        break;
+    case 3: // Amarelo
+        red = brightness;
+        green = brightness;
+        blue = 0;
+        break;
+    case 4: // Ciano
+        red = 0;
+        green = brightness;
+        blue = brightness;
+        break;
+    case 5: // Roxo
+        red = brightness;
+        green = 0;
+        blue = brightness;
+        break;
+    case 6: // Branco
+        red = brightness;
+        green = brightness;
+        blue = brightness;
+        break;
+    }
+
+    // Atualiza os valores de PWM
+    TIM3->CCR1 = green; // Canal 1 - Verde
+    TIM3->CCR2 = blue;  // Canal 2 - Azul
+    TIM3->CCR3 = red;   // Canal 3 - Vermelho
+}
+
+// Função para escrever um caractere via UART
+void uart_write(char ch)
+{
+    // Espera até que o registrador de dados de transmissão esteja vazio
+    while (!(USART1->SR & USART_SR_TXE))
+    {
+    }
+    // Escreve o caractere no registrador de transmissão
+    USART1->DR = (ch & 0xFF);
+}
+
+// Configuração da USART1 para comunicação serial
+void USART1Config()
+{
+    // Habilita o clock da USART1
+    RCC->APB2ENR |= RCC_APB2ENR_USART1EN;
+    // Habilita o receptor e transmissor
+    USART1->CR1 |= USART_CR1_RE | USART_CR1_TE;
+    // Define o Baud Rate
+    USART1->BRR = ((CPU_CLK + (BaudRate / 2U)) / BaudRate);
+    // Habilita a interrupção RXNE
+    USART1->CR1 |= USART_CR1_RXNEIE;
+    // Habilita a interrupção da USART1 no NVIC
+    NVIC_EnableIRQ(USART1_IRQn);
+    // Habilita a USART
+    USART1->CR1 |= USART_CR1_UE;
+}
+
+// Habilitação dos clocks
+void RCCEnable()
+{
+    RCC->APB2ENR |= RCC_APB2ENR_IOPAEN | RCC_APB2ENR_IOPBEN | RCC_APB2ENR_USART1EN;
+}
+
+// Configuração dos GPIOs para UART e PWM
+void GPIOConfig()
+{
+    // Configura PA9 (TX) e PA10 (RX) para UART
+    GPIOA->CRH &= 0xFFFFFF0F;
+    GPIOA->CRH |= 0x000000B0;
+    GPIOA->CRH &= 0xFFFFF0FF;
+    GPIOA->CRH |= 0x00000400;
+
+    // Configura PA5, PA4 e PA3 para PWM (verde, azul, vermelho)
+    GPIOA->CRL &= 0xFF0FFFFF;
+    GPIOA->CRL |= 0x00B00000;
+    GPIOA->CRL &= 0xFFF0FFFF;
+    GPIOA->CRL |= 0x000B0000;
+    GPIOA->CRL &= 0xFFFF0FFF;
+    GPIOA->CRL |= 0x0000B000;
+}
+
+// Configuração do Timer 2 para controle de tempo no modo demo
+void timer2Config()
+{
+    RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
+    TIM2->PSC = 8000 - 1;
+    TIM2->ARR = 20 - 1; // 20ms
+    TIM2->DIER |= TIM_DIER_UIE;
+    NVIC_EnableIRQ(TIM2_IRQn);
+}
+
+// Interrupção do Timer 2 para atualizar a sequência de cores
+void TIM2_IRQHandler(void)
+{
+    if (TIM2->SR & TIM_SR_UIF)
+    {
+        TIM2->SR &= ~TIM_SR_UIF;
+        updateColorSequence();
+    }
+}
+
+// Configuração do Timer 3 para gerar PWM para as cores RGB
+void Timer3Config()
+{
+    RCC->APB1ENR |= RCC_APB1ENR_TIM3EN;
+
+    TIM3->PSC = 0;
+    TIM3->ARR = 100; // Resolução de 100%
+
+    // Configura os modos de captura/compare para PWM
+    TIM3->CCMR1 = 0x6060; // Canais 1 e 2
+    TIM3->CCMR2 = 0x0060; // Canal 3
+    TIM3->CCER = 0x0111;  // Habilita os canais 1, 2, e 3
+    TIM3->CR1 |= (1 << 0); // Ativa o Timer 3
+}
+
+// Interrupção da USART1 para tratar comunicação serial
+void USART1_IRQHandler(void)
+{
+    if ((USART1->SR & USART_SR_RXNE)) // Verifica se um dado foi recebido
+    {
+        ch = USART1->DR; // Lê o dado
+        uart_write(ch); // Envia o caractere de volta (eco)
+        if (ch != '\r') // Se não for uma nova linha
+        {
+            command[i++] = ch; // Armazena no buffer de comando
+        }
+        else // Se for uma nova linha
+        {
+            command[i] = '\0'; // Termina o comando com NULL
+            MAIN_SM = 1; // Ativa o estado principal
+            i = 0; // Reseta o índice
+        }
+    }
+    if ((USART1->SR & USART_SR_TXE)) // Se o transmissor estiver pronto
+    {
+        if (*ptr)
+        {
+            USART1->DR = (*ptr & 0xFF); // Envia o próximo caractere
+            ptr++;
+        }
+        else
+        {
+            USART1->CR1 &= ~USART_CR1_TXEIE; // Desativa a interrupção de transmissão
+        }
+    }
+}
